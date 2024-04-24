@@ -4,6 +4,10 @@ const cors = require('cors');
 require('dotenv').config()
 const port = process.env.PORT || 5000
 
+// ---------- JWT ----------
+
+const jwt = require('jsonwebtoken');
+
 // middleware
 app.use(cors())
 app.use(express.json())
@@ -33,6 +37,114 @@ async function run() {
         const reviewCollection = client.db("bistroDb").collection("reviews");
 
         const cartCollection = client.db("bistroDb").collection("carts");
+
+        const userCollection = client.db("bistroDb").collection("users");
+
+
+        // --------- JWT Related API --------------
+
+        app.post('/jwt', async (req, res) => {
+            const user = req.body;
+            const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
+                expiresIn: '1h'
+            })
+            res.send({ token });
+        })
+
+        // ----------- Verify JWT Token (Middleware) -----------
+
+        const verifyToken = (req, res, next) => {
+            if (!req.headers.authorization) {
+                return res.status(401).send({ message: 'Unauthorized Access' })
+            }
+            const token = req.headers.authorization.split(' ')[1]
+            jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+                if (err) {
+                    return res.status(401).send({ message: 'Unauthorized Access' })
+                }
+                req.decoded = decoded;
+                next();
+
+
+            })
+        }
+
+        // ------------- Verify Admin --------------
+
+        const verifyAdmin = async (req, res, next) => {
+            const email = req.decoded.email;
+            const query = { email: email }
+            const user = await userCollection.findOne(query);
+            const isAdmin = user?.role === 'admin'
+            if (!isAdmin) {
+                return res.status(403).send({ message: 'Forbidden Access' })
+            }
+        }
+
+        // -------------- Users Related API -----------
+
+        app.get('/users', verifyToken, verifyAdmin, async (req, res) => {
+            const result = await userCollection.find().toArray();
+            res.send(result);
+        })
+
+        app.get('/users/admin/:email', verifyToken, async (req, res) => {
+            const email = req.params.email;
+            if (email !== req.decoded.email) {
+                return res.status(403).send({ message: 'Forbidden Access' })
+            }
+            const query = { email: email }
+            const user = await userCollection.findOne(query)
+            let admin = false;
+            if (user) {
+                admin = user?.role === 'admin'
+            }
+            res.send({ admin })
+        })
+
+        app.post('/users', async (req, res) => {
+            const user = req.body;
+
+            // Insert email if user doesn't exists:
+
+            // You can do this many ways (1. email unique, 2. Upsert, 3. Simple checking)
+
+            const query = { email: user.email }
+            const existingUser = await userCollection.findOne(query);
+
+            if (existingUser) {
+                return res.send({ message: 'User already exists', insertedId: null })
+            } else {
+                const result = await userCollection.insertOne(user)
+                res.send(result);
+            }
+
+
+        })
+
+        // ----------- In general, if you want to update a resource completely, 
+        // ----------- you should use PUT. If you want to update only a part of a resource, 
+        // ----------- you should use PATCH.
+
+        app.patch('/users/admin/:id', verifyToken, verifyAdmin, async (req, res) => {    // patch means => update only a part of a resource
+            const id = req.params.id;
+            const filter = { _id: new ObjectId(id) }
+            const updatedDoc = {
+                $set: {
+                    role: 'admin'
+                }
+            }
+            // Update the first document that matches the filter
+            const result = await userCollection.updateOne(filter, updatedDoc);
+            res.send(result);
+        })
+
+        app.delete('/users/:id', verifyToken, verifyAdmin, async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: new ObjectId(id) }
+            const result = await userCollection.deleteOne(query);
+            res.send(result);
+        })
 
         // -------------- menuCollection ---------------
 
