@@ -8,6 +8,10 @@ const port = process.env.PORT || 5000
 
 const jwt = require('jsonwebtoken');
 
+// --------- Payment stripe -----------
+
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+
 // middleware
 app.use(cors())
 app.use(express.json())
@@ -39,6 +43,10 @@ async function run() {
         const cartCollection = client.db("bistroDb").collection("carts");
 
         const userCollection = client.db("bistroDb").collection("users");
+
+        // -------- Payment Collection ------------
+
+        const paymentCollection = client.db("bistroDb").collection("payments");
 
 
         // --------- JWT Related API --------------
@@ -214,6 +222,42 @@ async function run() {
             const id = req.params.id;
             const query = { _id: new ObjectId(id) }
             const result = await cartCollection.deleteOne(query);
+            res.send(result);
+        })
+
+        // --------- Payment stripe -----------
+
+        app.post('/create-payment-intent', async (req, res) => {
+            const { price } = req.body;
+            const amount = parseInt(price * 100)
+            const paymentIntent = await stripe.paymentIntents.create({
+                amount: amount,
+                currency: 'usd',
+                payment_method_types: ["card"],
+            })
+            res.send({
+                clientSecret: paymentIntent.client_secret
+            });
+        })
+
+        app.post('/payments', async (req, res) => {
+            const payment = req.body;
+            const paymentResult = await paymentCollection.insertOne(payment);
+            const query = {
+                _id: {
+                    $in: payment.cartIds.map(id => new ObjectId(id))
+                }
+            }
+            const deleteResult = await cartCollection.deleteMany(query);
+            res.send({ paymentResult, deleteResult })
+        })
+
+        app.get('/payments/:email', verifyToken, async (req, res) => {
+            const query = { email: req.params.email }
+            if (req.params.email !== req.decoded.email) {
+                return res.status(403).send({ message: 'Forbidden Access' })
+            }
+            const result = await paymentCollection.find(query).toArray()
             res.send(result);
         })
 
